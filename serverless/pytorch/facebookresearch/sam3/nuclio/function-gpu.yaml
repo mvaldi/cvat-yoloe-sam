@@ -103,6 +103,7 @@ spec:
     - volume:
         hostPath:
           path: /home/mvaldi/.cache/huggingface
+        name: hf-cache
       volumeMount:
         mountPath: /root/.cache/huggingface
         name: hf-cache
