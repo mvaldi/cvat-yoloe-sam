@@ -97,6 +97,12 @@ const defaultState: PluginsState = {
             aiTools: {
                 tabs: [],
             },
+            player: {
+                slider: [],
+            },
+            menuActions: {
+                items: [],
+            },
         },
     },
 };
