@@ -21,6 +21,7 @@ import {
     Modal,
     Empty,
     Alert,
+    Radio,
 } from 'antd';
 import {
     ThunderboltOutlined,
@@ -136,6 +137,7 @@ function YOLOEInlinePanel(props: Props): JSX.Element {
     const [error, setError] = useState<string | null>(null);
     const [predictions, setPredictions] = useState<PredictionResult | null>(null);
     const [showPreview, setShowPreview] = useState(false);
+    const [outputType, setOutputType] = useState<'rectangle' | 'polygon' | 'obb'>('rectangle');
 
     // Session storage key for selected frames
     const sessionKey = useMemo(() => `yoloe_refs_${jobInstance.id}`, [jobInstance.id]);
@@ -305,7 +307,7 @@ function YOLOEInlinePanel(props: Props): JSX.Element {
                     job_id: jobInstance.id,
                     frames: [frame],
                     threshold,
-                    output_type: 'rectangle',
+                    output_type: outputType,
                 }),
             });
 
@@ -329,7 +331,7 @@ function YOLOEInlinePanel(props: Props): JSX.Element {
         } finally {
             setLoading(false);
         }
-    }, [vpeStatus, selectedFrames, frame, jobInstance.id, threshold]);
+    }, [vpeStatus, selectedFrames, frame, jobInstance.id, threshold, outputType]);
 
     // Apply predictions
     const handleApplyPredictions = useCallback(async () => {
@@ -531,6 +533,22 @@ function YOLOEInlinePanel(props: Props): JSX.Element {
                         onChange={setThreshold}
                         tooltip={{ formatter: (v: number | undefined) => v?.toFixed(2) }}
                     />
+                </div>
+
+                {/* Output type selector */}
+                <div style={{ marginBottom: 8 }}>
+                    <Text style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Output Type:</Text>
+                    <Radio.Group
+                        value={outputType}
+                        onChange={(e) => setOutputType(e.target.value)}
+                        size="small"
+                        optionType="button"
+                        buttonStyle="solid"
+                    >
+                        <Radio.Button value="rectangle">Rectangle</Radio.Button>
+                        <Radio.Button value="polygon">Polygon</Radio.Button>
+                        <Radio.Button value="obb">OBB</Radio.Button>
+                    </Radio.Group>
                 </div>
 
                 {/* Detect button */}
