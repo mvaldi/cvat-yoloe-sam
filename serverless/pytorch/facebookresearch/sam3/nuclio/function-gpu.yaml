@@ -99,10 +99,11 @@ spec:
       mountMode: volume
 
   # Mount host HuggingFace cache to avoid re-downloading models
+  # Note: __USER_HOME__ is replaced by zup.sh at deploy time
   volumes:
     - volume:
         hostPath:
-          path: ~/.cache/huggingface
+          path: __USER_HOME__/.cache/huggingface
         name: hf-cache
       volumeMount:
         mountPath: /root/.cache/huggingface
