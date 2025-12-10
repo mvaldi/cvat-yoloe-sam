@@ -64,6 +64,7 @@ spec:
       workerAvailabilityTimeoutMilliseconds: 10000
       attributes:
         maxRequestBodySize: 33554432 # 32MB
+        port: 32771
   resources:
     limits:
       nvidia.com/gpu: 1

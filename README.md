@@ -49,51 +49,28 @@ do trainings and a dedicated support with 24 hour SLA.
 - [Frequently asked questions](https://docs.cvat.ai/docs/faq/)
 - [Where to ask questions](#where-to-ask-questions)
 
-## Partners ❤️
+## SAM3
 
-CVAT is used by teams all over the world. In the list, you can find key companies which
-help us support the product or an essential part of our ecosystem. If you use us,
-please drop us a line at [contact@cvat.ai](mailto:contact+github@cvat.ai).
+Install the HuggingFace CLI and login with your HuggingFace account to access the SAM 3 model:
 
-- [Human Protocol](https://hmt.ai) uses CVAT as a way of adding annotation service to the Human Protocol.
-- [FiftyOne](https://fiftyone.ai) is an open-source dataset curation and model analysis
-  tool for visualizing, exploring, and improving computer vision datasets and models that are
-  [tightly integrated](https://voxel51.com/docs/fiftyone/integrations/cvat.html) with CVAT
-  for annotation and label refinement.
+```bash
+curl -LsSf https://hf.co/cli/install.sh | bash
+```
 
-## Public datasets
+Then login into your HuggingFace account and download the SAM 3 model, you need to [have access approved by HuggingFace to download the model](https://huggingface.co/facebook/sam3):
+```bash
+huggingface-cli login
+huggingface-cli download facebook/sam3
+```
 
-[ATLANTIS](https://github.com/smhassanerfani/atlantis), an open-source dataset for semantic segmentation
-of waterbody images, developed by [iWERS](http://ce.sc.edu/iwers/) group in the
-Department of Civil and Environmental Engineering at the University of South Carolina is using CVAT.
-
-For developing a semantic segmentation dataset using CVAT, see:
-
-- [ATLANTIS published article](https://www.sciencedirect.com/science/article/pii/S1364815222000391)
-- [ATLANTIS Development Kit](https://github.com/smhassanerfani/atlantis/tree/master/adk)
-- [ATLANTIS annotation tutorial videos](https://www.youtube.com/playlist?list=PLIfLGY-zZChS5trt7Lc3MfNhab7OWl2BR).
-
-## CVAT online: [cvat.ai](https://cvat.ai)
-
-This is an online version of CVAT. It's free, efficient, and easy to use.
-
-[cvat.ai](https://cvat.ai) runs the latest version of the tool. You can create up
-to 10 tasks there and upload up to 500Mb of data to annotate. It will only be
-visible to you or the people you assign to it.
-
-For now, it does not have [analytics features](https://docs.cvat.ai/docs/administration/advanced/analytics/)
-like management and monitoring the data annotation team. It also does not allow exporting images, just the annotations.
-
-We plan to enhance [cvat.ai](https://cvat.ai) with new powerful features. Stay tuned!
 
 ## Prebuilt Docker images 🐳
 
 Prebuilt docker images are the easiest way to start using CVAT locally. They are available on Docker Hub:
 
-- [cvat/server](https://hub.docker.com/r/cvat/server)
-- [cvat/ui](https://hub.docker.com/r/cvat/ui)
-
-The images have been downloaded more than 1M times so far.
+```bash
+bash zup.sh
+```
 
 ## Screencasts 🎦
 

@@ -1,0 +1,95 @@
+metadata:
+  name: pth-ultralytics-yoloe-visual-prompt
+  namespace: cvat
+  annotations:
+    name: YOLOE Visual Prompt
+    type: detector
+    # Labels dinámicos - el usuario los define al seleccionar referencias
+    # Usamos un label placeholder que se mapea a cualquier label del job
+    spec: |
+      [
+        {"id": 0, "name": "visual_prompt_class", "type": "any"}
+      ]
+    # Custom annotations for YOLOE Visual Prompting
+    framework: pytorch
+    # Indicador especial para el UI que este modelo requiere referencias visuales
+    min_pos_points: 0
+    startswith_box: true
+    help_message: |
+      YOLOE Visual Prompting - Detecta objetos basándose en ejemplos de referencia.
+
+      FLUJO DE USO:
+      1. Primero anote algunos frames manualmente con bounding boxes
+      2. Estos frames anotados servirán como referencias visuales
+      3. El modelo aprenderá de sus anotaciones y detectará objetos similares
+      4. Mapee 'visual_prompt_class' a cada label que quiera detectar
+
+      El modelo soporta: bounding boxes, segmentación y OBB.
+
+spec:
+  description: YOLOE Visual Prompting - Zero-shot detection using reference annotations
+  runtime: 'python:3.10'
+  handler: main:handler
+  eventTimeout: 120s  # Mayor timeout para procesamiento de múltiples referencias
+
+  build:
+    image: cvat.pth.ultralytics.yoloe-visual-prompt:latest-gpu
+    baseImage: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+    codeEntryType: image
+
+    directives:
+      preCopy:
+        - kind: ENV
+          value: DEBIAN_FRONTEND=noninteractive
+        - kind: ENV
+          value: NVIDIA_VISIBLE_DEVICES=all
+        - kind: ENV
+          value: NVIDIA_DRIVER_CAPABILITIES=compute,utility
+        - kind: USER
+          value: root
+        - kind: RUN
+          value: |
+            apt-get update && apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev git \
+            libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev wget \
+            && rm -rf /var/lib/apt/lists/*
+        - kind: RUN
+          value: ln -sf /usr/bin/python3 /usr/bin/python
+        - kind: WORKDIR
+          value: /opt/nuclio
+        # Install ultralytics with YOLOE support (requires version >= 8.3.0)
+        - kind: RUN
+          value: |
+            pip install --no-cache-dir opencv-python-headless pillow pyyaml numpy redis huggingface-hub && \
+            pip install --no-cache-dir "ultralytics>=8.3.200"
+        # Download YOLOE model (segmentation version for OBB support via post-processing)
+        - kind: RUN
+          value: |
+            python -c "from huggingface_hub import hf_hub_download; hf_hub_download('jameslahm/yoloe', 'yoloe-11l-seg.pt', local_dir='/opt/nuclio')"
+        - kind: ENV
+          value: MODEL_PATH=/opt/nuclio/yoloe-11l-seg.pt
+        - kind: ENV
+          value: REDIS_HOST=cvat_redis_ondisk
+        - kind: ENV
+          value: REDIS_PORT=6666
+        - kind: ENV
+          value: VPE_TTL_DAYS=30
+
+  triggers:
+    myHttpTrigger:
+      numWorkers: 1
+      kind: 'http'
+      workerAvailabilityTimeoutMilliseconds: 30000
+      attributes:
+        maxRequestBodySize: 134217728  # 128MB for multiple reference images
+
+  resources:
+    limits:
+      nvidia.com/gpu: 1
+
+  platform:
+    attributes:
+      restartPolicy:
+        name: always
+        maximumRetryCount: 3
+      mountMode: volume

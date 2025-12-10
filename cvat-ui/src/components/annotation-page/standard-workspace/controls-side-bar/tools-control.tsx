@@ -32,7 +32,7 @@ import {
 } from 'cvat-core-wrapper';
 import openCVWrapper, { MatType } from 'utils/opencv-wrapper/opencv-wrapper';
 import {
-    CombinedState, ActiveControl, ToolsBlockerState, PluginComponent,
+    CombinedState, ActiveControl, ToolsBlockerState,
 } from 'reducers';
 import {
     interactWithCanvas,
@@ -52,6 +52,8 @@ import ApproximationAccuracy, {
 import { switchToolsBlockerState } from 'actions/settings-actions';
 import withVisibilityHandling from './handle-popover-visibility';
 import ToolsTooltips from './interactor-tooltips';
+import YOLOEInlinePanel from './yoloe-inline-panel';
+import SAM3InlinePanel from './sam3-inline-panel';
 
 interface StateToProps {
     canvasInstance: Canvas;
@@ -68,7 +70,6 @@ interface StateToProps {
     defaultApproxPolyAccuracy: number;
     toolsBlockerState: ToolsBlockerState;
     frameIsDeleted: boolean;
-    interactorExtras: PluginComponent[];
 }
 
 interface DispatchToProps {
@@ -104,15 +105,6 @@ function mapStateToProps(state: CombinedState): StateToProps {
         settings: {
             workspace: { toolsBlockerState, defaultApproxPolyAccuracy },
         },
-        plugins: {
-            components: {
-                aiTools: {
-                    interactors: {
-                        extras: interactorExtras,
-                    },
-                },
-            },
-        },
     } = state;
 
     return {
@@ -130,7 +122,6 @@ function mapStateToProps(state: CombinedState): StateToProps {
         defaultApproxPolyAccuracy,
         toolsBlockerState,
         frameIsDeleted,
-        interactorExtras,
     };
 }
 
@@ -1069,7 +1060,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
     private renderInteractorBlock(): JSX.Element {
         const {
-            interactors, canvasInstance, labels, onInteractionStart, interactorExtras,
+            interactors, canvasInstance, labels, onInteractionStart,
         } = this.props;
         const {
             activeInteractor, activeLabelID, fetching, startInteractingWithBox, convertMasksToPolygons,
@@ -1089,13 +1080,6 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
         const minNegVertices = activeInteractor?.params?.canvas?.minNegVertices ?? -1;
         const renderStartWithBox = activeInteractor?.params?.canvas?.startWithBoxOptional ?? false;
-
-        const renderedInteractorExtras = interactorExtras
-            .sort((a, b) => a.data.weight - b.data.weight)
-            .filter((plugin) => plugin.data.shouldBeRendered(this.props, this.state))
-            .map(({ component: Component }, index) => (
-                <Component targetProps={this.props} targetState={this.state} key={index} />
-            ));
 
         return (
             <>
@@ -1159,9 +1143,6 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                             <Text>Start with a bounding box</Text>
                         </div>
                     )}
-                </div>
-                <div className='cvat-tools-interactor-extras'>
-                    {renderedInteractorExtras}
                 </div>
                 <Row align='middle' justify='end'>
                     <Col>
@@ -1335,6 +1316,30 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                                 {this.renderLabelBlock()}
                                 {this.renderTrackerBlock()}
                             </>
+                        ),
+                    }, {
+                        key: 'yoloe-vp',
+                        label: 'YOLOE VP',
+                        children: (
+                            <YOLOEInlinePanel
+                                jobInstance={this.props.jobInstance}
+                                frame={this.props.frame}
+                                labels={this.props.labels}
+                                curZOrder={this.props.curZOrder}
+                                createAnnotations={this.props.createAnnotations}
+                            />
+                        ),
+                    }, {
+                        key: 'sam3',
+                        label: 'SAM3',
+                        children: (
+                            <SAM3InlinePanel
+                                jobInstance={this.props.jobInstance}
+                                frame={this.props.frame}
+                                labels={this.props.labels}
+                                curZOrder={this.props.curZOrder}
+                                createAnnotations={this.props.createAnnotations}
+                            />
                         ),
                     }]}
                 />

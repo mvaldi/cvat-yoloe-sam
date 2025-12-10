@@ -1,0 +1,8 @@
+# Override for Nuclio with newer Docker API compatibility
+# Use this if you get "client version is too old" errors
+
+services:
+  nuclio:
+    image: quay.io/nuclio/dashboard:1.13.17-amd64
+    environment:
+      DOCKER_API_VERSION: "1.44"

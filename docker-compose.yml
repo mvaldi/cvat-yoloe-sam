@@ -11,8 +11,8 @@ x-backend-env: &backend-env
   CVAT_REDIS_INMEM_PORT: 6379
   CVAT_REDIS_ONDISK_HOST: cvat_redis_ondisk
   CVAT_REDIS_ONDISK_PORT: 6666
-  CVAT_LOG_IMPORT_ERRORS: 'true'
-  CVAT_ALLOW_STATIC_CACHE: '${CVAT_ALLOW_STATIC_CACHE:-no}'
+  CVAT_LOG_IMPORT_ERRORS: "true"
+  CVAT_ALLOW_STATIC_CACHE: "${CVAT_ALLOW_STATIC_CACHE:-no}"
   DJANGO_LOG_SERVER_HOST: vector
   DJANGO_LOG_SERVER_PORT: 8282
   no_proxy: clickhouse,grafana,vector,nuclio,opa,${no_proxy:-}
@@ -53,11 +53,7 @@ services:
     container_name: cvat_redis_inmem
     image: redis:7.2.11-alpine
     restart: always
-    command: [
-      "redis-server",
-      "--save", "60", "100",
-      "--appendonly", "yes",
-    ]
+    command: ["redis-server", "--save", "60", "100", "--appendonly", "yes"]
     volumes:
       - cvat_inmem_db:/data
     networks:
@@ -77,9 +73,7 @@ services:
       - cvat_cache_db:/var/lib/kvrocks
     networks:
       - cvat
-    command: [
-      "--compact-cron", "0 3 * * *",
-      ]
+    command: ["--compact-cron", "0 3 * * *"]
 
   cvat_server:
     container_name: cvat_server
@@ -88,13 +82,12 @@ services:
     depends_on:
       <<: *backend-deps
       cvat_opa:
-        condition:
-          service_started
+        condition: service_started
     environment:
       <<: [*backend-env, *clickhouse-env]
-      DJANGO_MODWSGI_EXTRA_ARGS: ''
-      ALLOWED_HOSTS: '*'
-      ADAPTIVE_AUTO_ANNOTATION: 'false'
+      DJANGO_MODWSGI_EXTRA_ARGS: ""
+      ALLOWED_HOSTS: "*"
+      ADAPTIVE_AUTO_ANNOTATION: "false"
       NUMPROCS: 2
       CVAT_ANALYTICS: 1
       CVAT_BASE_URL:
@@ -103,10 +96,9 @@ services:
     labels:
       traefik.enable: "true"
       traefik.http.services.cvat.loadbalancer.server.port: "8080"
-      traefik.http.routers.cvat.rule:
-        Host(`${CVAT_HOST:-localhost}`) &&
+      traefik.http.routers.cvat.rule: Host(`${CVAT_HOST:-localhost}`) &&
         (PathPrefix(`/api/`) || PathPrefix(`/static/`) || PathPrefix(`/admin`)
-          || PathPrefix(`/django-rq`))
+        || PathPrefix(`/django-rq`))
       traefik.http.routers.cvat.entrypoints: web
     volumes:
       - cvat_data:/home/django/data
@@ -124,7 +116,7 @@ services:
     depends_on: *backend-deps
     environment:
       <<: *backend-env
-      CVAT_REDIS_INMEM_PASSWORD: ''
+      CVAT_REDIS_INMEM_PASSWORD: ""
       NUMPROCS: 1
     command: run worker notifications cleaning
     volumes:
@@ -268,6 +260,7 @@ services:
       - 8080:8080
       - 8090:8090
     environment:
+      DOCKER_API_VERSION: "1.44"
       CVAT_HOST: ${CVAT_HOST:-localhost}
       DJANGO_LOG_VIEWER_HOST: grafana
       DJANGO_LOG_VIEWER_PORT: 3000
@@ -374,7 +367,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: true
       GF_SERVER_ROOT_URL: http://${CVAT_HOST:-localhost}/analytics
-      GF_INSTALL_PLUGINS: 'grafana-clickhouse-datasource 4.8.2'
+      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource 4.8.2"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/all_events.json
     volumes:
       - ./components/analytics/grafana/dashboards/:/var/lib/grafana/dashboards/:ro

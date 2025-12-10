@@ -12,7 +12,7 @@ import textwrap
 from copy import deepcopy
 from datetime import timedelta
 from functools import wraps
-from typing import Any
+from typing import Any, Optional
 
 import datumaro.util.mask_tools as mask_tools
 import django_rq
@@ -84,7 +84,9 @@ class LambdaGateway:
             host or settings.NUCLIO["HOST"],
             port or settings.NUCLIO["PORT"],
         )
-        NUCLIO_FUNCTION_NAMESPACE = function_namespace or settings.NUCLIO["FUNCTION_NAMESPACE"]
+        NUCLIO_FUNCTION_NAMESPACE = (
+            function_namespace or settings.NUCLIO["FUNCTION_NAMESPACE"]
+        )
         NUCLIO_TIMEOUT = settings.NUCLIO["DEFAULT_TIMEOUT"]
         extra_headers = {
             "x-nuclio-project-name": "cvat",
@@ -115,7 +117,9 @@ class LambdaGateway:
             try:
                 yield LambdaFunction(self, item)
             except InvalidFunctionMetadataError:
-                slogger.glob.error("Failed to parse lambda function metadata", exc_info=True)
+                slogger.glob.error(
+                    "Failed to parse lambda function metadata", exc_info=True
+                )
 
     def get(self, func_id):
         data = self._http(url=self.NUCLIO_ROOT_URL + "/" + func_id)
@@ -138,13 +142,13 @@ class LambdaGateway:
             headers={"x-nuclio-function-name": func.id, "x-nuclio-path": "/"},
         )
 
-    def _invoke_directly(self, func, payload):
+    def _invoke_directly(self, func, payload, path: str = ""):
         # host.docker.internal for Linux will work only with Docker 20.10+
         NUCLIO_TIMEOUT = settings.NUCLIO["DEFAULT_TIMEOUT"]
         if os.path.exists("/.dockerenv"):  # inside a docker container
-            url = f"http://host.docker.internal:{func.port}"
+            url = f"http://host.docker.internal:{func.port}{path}"
         else:
-            url = f"http://localhost:{func.port}"
+            url = f"http://localhost:{func.port}{path}"
 
         with make_requests_session() as session:
             reply = session.post(url, timeout=NUCLIO_TIMEOUT, json=payload)
@@ -209,7 +213,10 @@ class LambdaFunction:
                 }
                 if parsed_label["type"] == "skeleton":
                     parsed_label.update(
-                        {"sublabels": parse_labels(label["sublabels"]), "svg": label["svg"]}
+                        {
+                            "sublabels": parse_labels(label["sublabels"]),
+                            "svg": label["svg"],
+                        }
                     )
                 parsed_labels.append(parsed_label)
 
@@ -222,7 +229,9 @@ class LambdaFunction:
 
         self.labels = parse_labels(spec)
         # mapping of labels and corresponding supported attributes
-        self.func_attributes = {item["name"]: item.get("attributes", []) for item in spec}
+        self.func_attributes = {
+            item["name"]: item.get("attributes", []) for item in spec
+        }
         for label, attributes in self.func_attributes.items():
             if len([attr["name"] for attr in attributes]) != len(
                 set([attr["name"] for attr in attributes])
@@ -241,7 +250,9 @@ class LambdaFunction:
         self.min_pos_points = int(meta_anno.get("min_pos_points", 1))
         self.min_neg_points = int(meta_anno.get("min_neg_points", -1))
         self.startswith_box = bool(meta_anno.get("startswith_box", False))
-        self.startswith_box_optional = bool(meta_anno.get("startswith_box_optional", False))
+        self.startswith_box_optional = bool(
+            meta_anno.get("startswith_box_optional", False)
+        )
         self.animated_gif = meta_anno.get("animated_gif", "")
         self.version = int(meta_anno.get("version", "1"))
         self.help_message = meta_anno.get("help_message", "")
@@ -287,26 +298,154 @@ class LambdaFunction:
         elif self.kind is FunctionKind.TRACKER:
             response.update(
                 {
-                    "supported_shape_types": self.supported_shape_types or ["rectangle"],
+                    "supported_shape_types": self.supported_shape_types
+                    or ["rectangle"],
                 }
             )
 
         return response
+
+    def _ensure_yoloe_vpe(self, db_task: Task, db_job: Job, threshold: float = 0.25):
+        """
+        Ensure YOLOE Visual Prompt Embeddings exist for the job.
+        If not, generate them from existing annotations.
+        """
+        from cvat.apps.dataset_manager.bindings import JobData
+
+        # Check if VPE already exists by calling the status endpoint
+        try:
+            status_payload = {"job_id": db_job.id}
+            status_response = self.gateway._invoke_directly(
+                self, status_payload, path="/status"
+            )
+            if status_response.get("exists"):
+                slogger.glob.info(f"YOLOE VPE already exists for job {db_job.id}")
+                return
+        except Exception as e:
+            slogger.glob.warning(f"Failed to check YOLOE VPE status: {e}")
+
+        # Get annotations from the job
+        job_data = JobData(
+            annotation_ir=db_job.get_annotation_slice(0, db_job.segment.stop_frame + 1),
+            db_job=db_job,
+        )
+
+        # Group annotations by frame
+        annotations_by_frame = {}
+        for shape in job_data.annotation_ir.shapes:
+            frame = shape.get("frame", 0)
+            if frame not in annotations_by_frame:
+                annotations_by_frame[frame] = []
+
+            label_id = shape.get("label_id")
+            try:
+                label = db_job.get_labels().get(pk=label_id)
+                label_name = label.name
+            except Exception:
+                label_name = f"label_{label_id}"
+
+            shape_type = shape.get("type")
+            points = shape.get("points", [])
+
+            # Convert to bbox format [x1, y1, x2, y2]
+            if shape_type == ShapeType.RECTANGLE and len(points) >= 4:
+                bbox = points[:4]
+            elif len(points) >= 4:
+                xs = points[0::2]
+                ys = points[1::2]
+                bbox = [min(xs), min(ys), max(xs), max(ys)]
+            else:
+                continue
+
+            annotations_by_frame[frame].append(
+                {
+                    "bbox": bbox,
+                    "label": label_name,
+                }
+            )
+
+        if not annotations_by_frame:
+            slogger.glob.warning(
+                f"No annotations found for YOLOE VPE generation in job {db_job.id}"
+            )
+            raise ValidationError(
+                "YOLOE Visual Prompt requires reference annotations. "
+                "Please annotate some frames first before running automatic detection.",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get frame provider for images
+        frame_provider = TaskFrameProvider(db_task)
+
+        # Build references payload (max 50 frames)
+        references = []
+        for frame_idx in sorted(annotations_by_frame.keys())[:50]:
+            try:
+                frame_data = frame_provider.get_frame(frame_idx, quality="original")
+                image_base64 = base64.b64encode(frame_data.data.getvalue()).decode(
+                    "utf-8"
+                )
+
+                references.append(
+                    {
+                        "frame": frame_idx,
+                        "image": image_base64,
+                        "annotations": annotations_by_frame[frame_idx],
+                    }
+                )
+            except Exception as e:
+                slogger.glob.warning(f"Failed to get frame {frame_idx} for YOLOE: {e}")
+                continue
+
+        if not references:
+            raise ValidationError(
+                "Failed to prepare reference images for YOLOE Visual Prompt.",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Generate VPE
+        slogger.glob.info(
+            f"Generating YOLOE VPE for job {db_job.id} with {len(references)} references"
+        )
+
+        vpe_payload = {
+            "job_id": db_job.id,
+            "references": references,
+        }
+
+        try:
+            # Call the generate-vpe endpoint
+            vpe_response = self.gateway._invoke_directly(
+                self, vpe_payload, path="/generate-vpe"
+            )
+            slogger.glob.info(
+                f"YOLOE VPE generated for job {db_job.id}: {vpe_response}"
+            )
+        except Exception as e:
+            slogger.glob.error(f"Failed to generate YOLOE VPE: {e}")
+            raise ValidationError(
+                f"Failed to generate Visual Prompt Embeddings: {e}",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def invoke(
         self,
         db_task: Task,
         data: dict[str, Any],
         *,
-        db_job: Job | None = None,
-        is_interactive: bool | None = False,
-        request: ExtendedRequest | None = None,
-        converter: DetectionResultConverter | None = None,
+        db_job: Optional[Job] = None,
+        is_interactive: Optional[bool] = False,
+        request: Optional[ExtendedRequest] = None,
+        converter: Optional[DetectionResultConverter] = None,
     ):
         if db_job is not None and db_job.get_task_id() != db_task.id:
             raise ValidationError(
                 "Job task id does not match task id", code=status.HTTP_400_BAD_REQUEST
             )
+
+        # Special handling for YOLOE Visual Prompt - auto-generate VPE if needed
+        if self.id == "pth-ultralytics-yoloe-visual-prompt" and db_job is not None:
+            self._ensure_yoloe_vpe(db_task, db_job, data.get("threshold", 0.25))
 
         payload = {}
         data = {k: v for k, v in data.items() if v is not None}
@@ -357,14 +496,19 @@ class LambdaFunction:
                         for model_attr in model_label.get("attributes", {}):
                             for db_attr in task_label.attributespec_set.all():
                                 if db_attr.name == model_attr["name"]:
-                                    attributes_default_mapping[model_attr["name"]] = db_attr.name
+                                    attributes_default_mapping[model_attr["name"]] = (
+                                        db_attr.name
+                                    )
 
                         mapping_by_default[model_label["name"]] = {
                             "name": task_label.name,
                             "attributes": attributes_default_mapping,
                         }
 
-                        if model_label["type"] == "skeleton" and task_label.type == "skeleton":
+                        if (
+                            model_label["type"] == "skeleton"
+                            and task_label.type == "skeleton"
+                        ):
                             mapping_by_default[model_label["name"]]["sublabels"] = (
                                 make_default_mapping(
                                     model_label["sublabels"],
@@ -377,19 +521,27 @@ class LambdaFunction:
         def update_mapping(_mapping, _model_labels, _db_labels):
             copy = deepcopy(_mapping)
             for model_label_name, mapping_item in copy.items():
-                md_label = next(filter(lambda x: x["name"] == model_label_name, _model_labels))
-                db_label = next(filter(lambda x: x.name == mapping_item["name"], _db_labels))
+                md_label = next(
+                    filter(lambda x: x["name"] == model_label_name, _model_labels)
+                )
+                db_label = next(
+                    filter(lambda x: x.name == mapping_item["name"], _db_labels)
+                )
                 mapping_item.setdefault("attributes", {})
                 mapping_item["md_label"] = md_label
                 mapping_item["db_label"] = db_label
                 if md_label["type"] == "skeleton" and db_label.type == "skeleton":
                     mapping_item["sublabels"] = update_mapping(
-                        mapping_item["sublabels"], md_label["sublabels"], db_label.sublabels.all()
+                        mapping_item["sublabels"],
+                        md_label["sublabels"],
+                        db_label.sublabels.all(),
                     )
             return copy
 
         def validate_labels_mapping(_mapping, _model_labels, _db_labels):
-            def validate_attributes_mapping(attributes_mapping, model_attributes, db_attributes):
+            def validate_attributes_mapping(
+                attributes_mapping, model_attributes, db_attributes
+            ):
                 db_attr_names = [attr.name for attr in db_attributes]
                 model_attr_names = [attr["name"] for attr in model_attributes]
                 for model_attr in attributes_mapping:
@@ -409,7 +561,9 @@ class LambdaFunction:
                 md_label = None
                 db_label = None
                 try:
-                    md_label = next(x for x in _model_labels if x["name"] == model_label_name)
+                    md_label = next(
+                        x for x in _model_labels if x["name"] == model_label_name
+                    )
                 except StopIteration:
                     raise ValidationError(
                         f'Invalid mapping. Unknown model label "{model_label_name}"'
@@ -418,7 +572,9 @@ class LambdaFunction:
                 try:
                     db_label = next(x for x in _db_labels if x.name == db_label_name)
                 except StopIteration:
-                    raise ValidationError(f'Invalid mapping. Unknown db label "{db_label_name}"')
+                    raise ValidationError(
+                        f'Invalid mapping. Unknown db label "{db_label_name}"'
+                    )
 
                 if not labels_compatible(md_label, db_label):
                     raise ValidationError(
@@ -439,7 +595,9 @@ class LambdaFunction:
                         )
 
                     validate_labels_mapping(
-                        mapping_item["sublabels"], md_label["sublabels"], db_label.sublabels.all()
+                        mapping_item["sublabels"],
+                        md_label["sublabels"],
+                        db_label.sublabels.all(),
                     )
 
         if not mapping:
@@ -462,11 +620,15 @@ class LambdaFunction:
                 abs_frame_id = data_start_frame + data[key] * step
                 if not db_job.segment.contains_frame(abs_frame_id):
                     raise ValidationError(
-                        f"The {desc} is outside the job range", code=status.HTTP_400_BAD_REQUEST
+                        f"The {desc} is outside the job range",
+                        code=status.HTTP_400_BAD_REQUEST,
                     )
 
         if self.kind == FunctionKind.DETECTOR:
             payload.update({"image": self._get_image(db_task, mandatory_arg("frame"))})
+            # Add job_id for functions that need it (e.g., YOLOE Visual Prompt)
+            if db_job is not None:
+                payload.update({"job": db_job.id})
         elif self.kind == FunctionKind.INTERACTOR:
             payload.update(
                 {
@@ -495,7 +657,9 @@ class LambdaFunction:
                 if shape is None:
                     return None
 
-                supported_shape_types = self.supported_shape_types or [ShapeType.RECTANGLE]
+                supported_shape_types = self.supported_shape_types or [
+                    ShapeType.RECTANGLE
+                ]
                 if shape["type"] not in supported_shape_types:
                     raise ValidationError(
                         f"This function does not support shapes of type {shape['type']!r}"
@@ -539,7 +703,9 @@ class LambdaFunction:
                                 None
                                 if state is None
                                 else json.loads(
-                                    signer.unsign(state, max_age=self.TRACKER_STATE_MAX_AGE)
+                                    signer.unsign(
+                                        state, max_age=self.TRACKER_STATE_MAX_AGE
+                                    )
                                 )
                             )
                             for state in states
@@ -550,7 +716,9 @@ class LambdaFunction:
                 raise ValidationError("Invalid or expired tracker state") from ex
         else:
             raise ValidationError(
-                "`{}` lambda function has incorrect type: {}".format(self.id, self.kind),
+                "`{}` lambda function has incorrect type: {}".format(
+                    self.id, self.kind
+                ),
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -572,7 +740,10 @@ class LambdaFunction:
                 except ValueError:
                     return False
 
-                return min_value <= value_num <= max_value and (value_num - min_value) % step == 0
+                return (
+                    min_value <= value_num <= max_value
+                    and (value_num - min_value) % step == 0
+                )
             elif db_attr_type == "checkbox":
                 return value in ["true", "false"]
             elif db_attr_type == "text":
@@ -588,13 +759,36 @@ class LambdaFunction:
                 if attr["name"] not in attr_mapping:
                     continue
                 db_attr_name = attr_mapping[attr["name"]]
-                db_attr = next(filter(lambda x: x["name"] == db_attr_name, db_attributes), None)
+                db_attr = next(
+                    filter(lambda x: x["name"] == db_attr_name, db_attributes), None
+                )
                 if db_attr is not None and check_attr_value(attr["value"], db_attr):
                     attributes.append({"name": db_attr["name"], "value": attr["value"]})
             return attributes
 
         if self.kind == FunctionKind.DETECTOR:
             response_filtered = []
+
+            # For YOLOE Visual Prompt, create dynamic mapping based on response labels
+            # because YOLOE returns actual label names from the reference annotations
+            if self.id == "pth-ultralytics-yoloe-visual-prompt":
+                # Get all unique labels from response
+                response_labels = set(item.get("label", "") for item in response)
+                # Create identity mapping for labels that exist in task
+                task_label_names = {label.name for label in task_labels}
+                for label_name in response_labels:
+                    if label_name in task_label_names and label_name not in mapping:
+                        db_label = next(l for l in task_labels if l.name == label_name)
+                        mapping[label_name] = {
+                            "name": label_name,
+                            "attributes": {},
+                            "md_label": {
+                                "name": label_name,
+                                "type": "any",
+                                "attributes": [],
+                            },
+                            "db_label": db_label,
+                        }
 
             for item in response:
                 item_label = item["label"]
@@ -610,7 +804,9 @@ class LambdaFunction:
 
                 if "elements" in item:
                     sublabels = mapping[item_label]["sublabels"]
-                    item["elements"] = [x for x in item["elements"] if x["label"] in sublabels]
+                    item["elements"] = [
+                        x for x in item["elements"] if x["label"] in sublabels
+                    ]
                     for element in item["elements"]:
                         element_label = element["label"]
                         db_label = sublabels[element_label]["db_label"]
@@ -630,7 +826,9 @@ class LambdaFunction:
         elif self.kind == FunctionKind.TRACKER:
             if "shapes" in response and not self.supported_shape_types:
                 response["shapes"] = [
-                    None if points is None else {"type": ShapeType.RECTANGLE, "points": points}
+                    None
+                    if points is None
+                    else {"type": ShapeType.RECTANGLE, "points": points}
                     for points in response["shapes"]
                 ]
             response["states"] = [
@@ -669,7 +867,9 @@ class LambdaQueue:
         )
         jobs = queue.job_class.fetch_many(job_ids, queue.connection)
 
-        return [LambdaJob(job) for job in jobs if job and LambdaRQMeta.for_job(job).lambda_]
+        return [
+            LambdaJob(job) for job in jobs if job and LambdaRQMeta.for_job(job).lambda_
+        ]
 
     def enqueue(
         self,
@@ -682,7 +882,7 @@ class LambdaQueue:
         max_distance,
         request,
         *,
-        job: int | None = None,
+        job: Optional[int] = None,
     ) -> LambdaJob:
         queue = self._get_queue()
         rq_id = RequestId(
@@ -699,7 +899,9 @@ class LambdaQueue:
                     rq.job.JobStatus.FINISHED,
                 }:
                     raise ValidationError(
-                        "Only one running request is allowed for the same task #{}".format(task),
+                        "Only one running request is allowed for the same task #{}".format(
+                            task
+                        ),
                         code=status.HTTP_409_CONFLICT,
                     )
                 rq_job.delete()
@@ -713,7 +915,9 @@ class LambdaQueue:
             with get_rq_lock_by_user(queue, user_id):
                 meta = LambdaRQMeta.build_for(
                     request=request,
-                    db_obj=Job.objects.get(pk=job) if job else Task.objects.get(pk=task),
+                    db_obj=Job.objects.get(pk=job)
+                    if job
+                    else Task.objects.get(pk=task),
                     function_id=lambda_func.id,
                 )
                 rq_job = queue.create_job(
@@ -760,17 +964,24 @@ class DetectionResultConverter:
         for label in db_labels:
             labels[label.name] = {"id": label.id, "attributes": {}, "type": label.type}
             if label.type == "skeleton":
-                labels[label.name]["sublabels"] = cls._convert_labels(label.sublabels.all())
+                labels[label.name]["sublabels"] = cls._convert_labels(
+                    label.sublabels.all()
+                )
             for attr in label.attributespec_set.values():
                 labels[label.name]["attributes"][attr["name"]] = attr["id"]
         return labels
 
-    def convert(self, *, conv_mask_to_poly: bool, frame: int, annotations: list) -> dict:
+    def convert(
+        self, *, conv_mask_to_poly: bool, frame: int, annotations: list
+    ) -> dict:
         data = {"tags": [], "shapes": []}
 
         for anno in annotations:
             if parsed := self._parse_anno(
-                labels=self._labels, conv_mask_to_poly=conv_mask_to_poly, frame=frame, anno=anno
+                labels=self._labels,
+                conv_mask_to_poly=conv_mask_to_poly,
+                frame=frame,
+                anno=anno,
             ):
                 if anno["type"].lower() == "tag":
                     data["tags"].append(parsed)
@@ -783,7 +994,7 @@ class DetectionResultConverter:
 
     def _parse_anno(
         self, *, labels: dict, conv_mask_to_poly: bool, frame: int, anno: dict
-    ) -> dict | None:
+    ) -> Optional[dict]:
         label = labels.get(anno["label"])
         if label is None:
             # Invalid label provided
@@ -814,7 +1025,9 @@ class DetectionResultConverter:
                 "occluded": False,
                 "outside": anno.get("outside", False),
                 "points": (
-                    anno.get("mask", []) if anno["type"] == "mask" else anno.get("points", [])
+                    anno.get("mask", [])
+                    if anno["type"] == "mask"
+                    else anno.get("points", [])
                 ),
                 "z_order": 0,
             }
@@ -828,7 +1041,9 @@ class DetectionResultConverter:
             elif anno["type"] == "mask":
                 [xtl, ytl, xbr, ybr] = shape["points"][-4:]
                 cut_points = shape["points"][:-4]
-                rle = mask_tools.mask_to_rle(np.array(cut_points)[:, np.newaxis])["counts"].tolist()
+                rle = mask_tools.mask_to_rle(np.array(cut_points)[:, np.newaxis])[
+                    "counts"
+                ].tolist()
                 rle.extend([xtl, ytl, xbr, ybr])
                 shape["points"] = rle
 
@@ -854,7 +1069,10 @@ class DetectionResultConverter:
                 def _map(sublabel_body):
                     try:
                         return next(
-                            filter(lambda x: x["label_id"] == sublabel_body["id"], parsed_elements)
+                            filter(
+                                lambda x: x["label_id"] == sublabel_body["id"],
+                                parsed_elements,
+                            )
                         )
                     except StopIteration:
                         return {
@@ -878,7 +1096,7 @@ class DetectionResultConverter:
 
 
 class DetectionResultCollector:
-    def __init__(self, task: Task, job: Job | None) -> None:
+    def __init__(self, task: Task, job: Optional[Job]) -> None:
         self._task = task
         self._job = job
 
@@ -982,10 +1200,10 @@ class LambdaJob:
         function: LambdaFunction,
         db_task: Task,
         threshold: float,
-        mapping: dict[str, str] | None,
+        mapping: Optional[dict[str, str]],
         conv_mask_to_poly: bool,
         *,
-        db_job: Job | None = None,
+        db_job: Optional[Job] = None,
     ):
         collector = DetectionResultCollector(db_task, db_job)
 
@@ -1036,13 +1254,14 @@ class LambdaJob:
         return job.get_status()
 
     @classmethod
-    def _get_frame_set(cls, db_task: Task, db_job: Job | None):
+    def _get_frame_set(cls, db_task: Task, db_job: Optional[Job]):
         if db_job:
             task_data = db_task.data
             data_start_frame = task_data.start_frame
             step = task_data.get_frame_step()
             frame_set = sorted(
-                (abs_id - data_start_frame) // step for abs_id in db_job.segment.frame_set
+                (abs_id - data_start_frame) // step
+                for abs_id in db_job.segment.frame_set
             )
         else:
             frame_set = range(db_task.data.size)
@@ -1057,7 +1276,7 @@ class LambdaJob:
         threshold: float,
         max_distance: int,
         *,
-        db_job: Job | None = None,
+        db_job: Optional[Job] = None,
     ):
         if db_job:
             data = dm.task.get_job_data(db_job.id)
@@ -1232,12 +1451,14 @@ def return_response(success_code=status.HTTP_200_OK):
         summary="Method returns the information about the function",
         responses={
             "200": OpenApiResponse(
-                response=OpenApiTypes.OBJECT, description="Information about the function"
+                response=OpenApiTypes.OBJECT,
+                description="Information about the function",
             ),
         },
     ),
     list=extend_schema(
-        operation_id="lambda_list_functions", summary="Method returns a list of functions"
+        operation_id="lambda_list_functions",
+        summary="Method returns a list of functions",
     ),
 )
 class FunctionViewSet(viewsets.ViewSet):
@@ -1390,7 +1611,9 @@ class RequestViewSet(viewsets.ViewSet):
             for queued_task_ids_chunk in take_by(sorted(queued_task_ids), 1000):
                 visible_task_ids.update(queryset.filter(id__in=queued_task_ids_chunk))
 
-        rq_jobs = [job.to_dict() for job in queued_jobs if job.get_task() in visible_task_ids]
+        rq_jobs = [
+            job.to_dict() for job in queued_jobs if job.get_task() in visible_task_ids
+        ]
 
         response_serializer = FunctionCallSerializer(rq_jobs, many=True)
         return response_serializer.data
@@ -1412,7 +1635,9 @@ class RequestViewSet(viewsets.ViewSet):
             max_distance = request_data.get("max_distance")
         except KeyError as err:
             raise ValidationError(
-                "`{}` lambda function was run ".format(request_data.get("function", "undefined"))
+                "`{}` lambda function was run ".format(
+                    request_data.get("function", "undefined")
+                )
                 + "with wrong arguments ({})".format(str(err)),
                 code=status.HTTP_400_BAD_REQUEST,
             )

@@ -1,0 +1,108 @@
+# Copyright (C) CVAT.ai Corporation
+#
+# SPDX-License-Identifier: MIT
+
+metadata:
+  name: pth-facebookresearch-sam3-gpu
+  namespace: cvat
+  annotations:
+    name: Segment Anything 3 (GPU)
+    version: 2
+    type: interactor
+    spec:
+    min_pos_points: 0
+    min_neg_points: 0
+    startswith_box_optional: true
+    animated_gif: https://raw.githubusercontent.com/cvat-ai/cvat/develop/site/content/en/images/hrnet_example.gif
+    help_message: SAM3 with text prompts, points, boxes. Supports Text-to-Segment, Text-to-Detect, and Text-to-Track (270K+ concepts).
+
+spec:
+  description: SAM3 - Segment Anything with Concepts. Text prompts, open-vocabulary detection, video tracking.
+  runtime: 'python:3.11'
+  handler: main:handler
+  eventTimeout: 120s
+  env:
+    - name: PYTHONPATH
+      value: /opt/nuclio/sam3
+    - name: HF_HOME
+      value: /root/.cache/huggingface
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: huggingface-secret
+          key: token
+          optional: true
+    # Redis configuration for caching (TTL 1 day)
+    - name: REDIS_HOST
+      value: cvat_redis_ondisk
+    - name: REDIS_PORT
+      value: "6666"
+    - name: REDIS_TTL
+      value: "86400"
+
+  build:
+    image: cvat.pth.facebookresearch.sam3:latest-gpu
+    baseImage: python:3.11-slim
+
+    directives:
+      preCopy:
+      # set NVIDIA container runtime settings
+        - kind: ENV
+          value: NVIDIA_VISIBLE_DEVICES=all
+        - kind: ENV
+          value: NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # disable interactive frontend
+        - kind: ENV
+          value: DEBIAN_FRONTEND=noninteractive
+      # set workdir
+        - kind: WORKDIR
+          value: /opt/nuclio/sam3
+      # install basic deps
+        - kind: RUN
+          value: apt-get update && apt-get -y install curl git ffmpeg libsm6 libxext6 libgl1
+      # upgrade pip
+        - kind: RUN
+          value: pip install --upgrade pip
+      # install PyTorch with CUDA 12.4 support
+        - kind: RUN
+          value: pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+      # install transformers with SAM3 support (main branch has SAM3)
+        - kind: RUN
+          value: pip install 'git+https://github.com/huggingface/transformers.git'
+      # install accelerate for device management
+        - kind: RUN
+          value: pip install accelerate
+      # install additional dependencies
+        - kind: RUN
+          value: pip install pycocotools matplotlib Pillow huggingface_hub redis opencv-python-headless
+      # create cache directory for Hugging Face models
+        - kind: RUN
+          value: mkdir -p /opt/nuclio/sam3/hf_cache
+
+  triggers:
+    myHttpTrigger:
+      numWorkers: 1
+      kind: 'http'
+      workerAvailabilityTimeoutMilliseconds: 30000
+      attributes:
+        maxRequestBodySize: 67108864 # 64MB for larger images/video frames
+
+  resources:
+    limits:
+      nvidia.com/gpu: 1
+
+  platform:
+    attributes:
+      restartPolicy:
+        name: always
+        maximumRetryCount: 3
+      mountMode: volume
+
+  # Mount host HuggingFace cache to avoid re-downloading models
+  volumes:
+    - volume:
+        hostPath:
+          path: /home/mvaldi/.cache/huggingface
+      volumeMount:
+        mountPath: /root/.cache/huggingface
+        name: hf-cache

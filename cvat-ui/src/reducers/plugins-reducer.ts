@@ -52,14 +52,6 @@ const defaultState: PluginsState = {
         loginPage: {
             loginForm: [],
         },
-        annotationPage: {
-            player: {
-                slider: [],
-            },
-            menuActions: {
-                items: [],
-            },
-        },
         modelsPage: {
             topBar: {
                 items: [],
@@ -101,9 +93,9 @@ const defaultState: PluginsState = {
                 items: [],
             },
         },
-        aiTools: {
-            interactors: {
-                extras: [],
+        annotationPage: {
+            aiTools: {
+                tabs: [],
             },
         },
     },
