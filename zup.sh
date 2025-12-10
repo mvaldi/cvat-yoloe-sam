@@ -84,6 +84,12 @@ fi
 # Deploy SAM3
 echo "[4/4] Deploying SAM3..."
 if [ "$DEPLOY_SAM3" = true ]; then
+    # Replace __USER_HOME__ placeholder with actual home directory
+    SAM3_YAML="$SCRIPT_DIR/serverless/pytorch/facebookresearch/sam3/nuclio/function-gpu.yaml"
+    if grep -q "__USER_HOME__" "$SAM3_YAML"; then
+        echo "      Configuring SAM3 cache path for user: $USER"
+        sed -i "s|__USER_HOME__|$HOME|g" "$SAM3_YAML"
+    fi
     "$SCRIPT_DIR/serverless/deploy_gpu.sh" "$SCRIPT_DIR/serverless/pytorch/facebookresearch/sam3/"
 else
     echo "      Skipping SAM3 deployment (--no-sam3)"
