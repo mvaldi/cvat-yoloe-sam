@@ -1,6 +1,6 @@
 #!/bin/bash
 # CVAT Startup Script with Serverless AI Models
-# Usage: ./zup.sh [--no-yoloe]
+# Usage: ./zup.sh [--host <IP>] [--no-yoloe] [--no-sam3]
 
 set -e
 
@@ -10,9 +10,16 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 DEPLOY_YOLOE=true
 DEPLOY_SAM3=true
 
+# Default host (can be overridden with --host)
+CVAT_HOST="${CVAT_HOST:-localhost}"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --host)
+            CVAT_HOST="$2"
+            shift 2
+            ;;
         --no-yoloe)
             DEPLOY_YOLOE=false
             shift
@@ -26,6 +33,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: ./zup.sh [OPTIONS]"
             echo ""
             echo "Options:"
+            echo "  --host <IP>   Set the host IP/hostname to access CVAT (default: localhost)"
             echo "  --no-yoloe    Skip YOLOE Visual Prompt deployment"
             echo "  --no-sam3     Skip SAM3 deployment"
             exit 1
@@ -35,11 +43,12 @@ done
 
 echo "========================================="
 echo "Starting CVAT with Serverless Functions"
+echo "  Host: $CVAT_HOST"
 echo "========================================="
 
 # Start CVAT services
 echo "[1/3] Starting CVAT containers..."
-CVAT_HOST=localhost docker compose \
+CVAT_HOST="$CVAT_HOST" docker compose \
     -f docker-compose.yml \
     -f docker-compose.dev.yml \
     -f components/serverless/docker-compose.serverless.yml \
@@ -83,8 +92,8 @@ fi
 echo ""
 echo "========================================="
 echo "CVAT is ready!"
-echo "  - Web UI: http://localhost:8080"
-echo "  - Nuclio: http://localhost:8070"
+echo "  - Web UI: http://$CVAT_HOST:8080"
+echo "  - Nuclio: http://$CVAT_HOST:8070"
 echo ""
 echo "Deployed models:"
 [ "$DEPLOY_YOLOE" = true ] && echo "  - YOLOE Visual Prompt (visual prompting)"
