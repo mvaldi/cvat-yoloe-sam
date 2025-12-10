@@ -29,8 +29,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from cvat.apps.engine.frame_provider import FrameQuality, TaskFrameProvider
-from cvat.apps.engine.models import Job
+from cvat.apps.engine.frame_provider import TaskFrameProvider
+from cvat.apps.engine.models import FrameQuality, Job
 from cvat.apps.engine.types import ExtendedRequest
 from cvat.utils.http import make_requests_session
 
