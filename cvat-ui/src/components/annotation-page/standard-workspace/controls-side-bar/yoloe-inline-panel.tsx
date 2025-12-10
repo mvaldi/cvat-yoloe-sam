@@ -546,8 +546,8 @@ function YOLOEInlinePanel(props: Props): JSX.Element {
                         buttonStyle="solid"
                     >
                         <Radio.Button value="rectangle">Rectangle</Radio.Button>
-                        <Radio.Button value="polygon">Polygon</Radio.Button>
                         <Radio.Button value="obb">OBB</Radio.Button>
+                        <Radio.Button value="polygon">Polygon</Radio.Button>
                     </Radio.Group>
                 </div>
 
